@@ -4,8 +4,9 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrpyt");
-const saltRounds = 10;
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 const app = express();
 
@@ -15,15 +16,40 @@ app.use(bodyParser.urlencoded({
     extended: true 
 }));
 
+// Session package initial config
+app.use(session({
+    secret: "Our little secret.",
+    resave: false,
+    saveUninitialized: false
+}));
+
+// Intialise the passport package
+app.use(passport.initialize());
+// Use passport to deal with the sessions
+app.use(passport.session());
+
 mongoose.connect("mongodb://localhost:27017/userDB", {useNewUrlParser: true, useUnifiedTopology: true});
+mongoose.set("useCreateIndex", true);
 
 const userSchema = new mongoose.Schema ({
     email: String,
     password: String
 });
 
+// Setup passport-local-mongoose package as a plugin with a mongoose schema
+userSchema.plugin(passportLocalMongoose);
 
 const User = new mongoose.model("User", userSchema);
+
+passport.use(User.createStrategy());
+
+// Serialise - Creates a 'fortune cookie' and stuffs the message (e.g.user's ID)
+passport.serializeUser(User.serializeUser());
+
+// Deserialise - Allows passport to 'crumble the cookie' and decrypt the message
+passport.deserializeUser(User.deserializeUser());
+
+
 
 app.get("/", function(req,res){
     res.render("home");
@@ -37,44 +63,50 @@ app.get("/register", function(req,res){
     res.render("register");
 });
 
+app.get("/secrets", function(req, res){
+    if (req.isAuthenticated()){
+        res.render("secrets");
+    } else {
+        res.redirect("/login");
+    }
+});
+
 app.post("/register", function(req, res){
 
-    bcrypt.hash(req.body.password, saltRounds, function(err, hash) {
-        const newUser = new User({
-            email: req.body.username,
-            password: hash
-        });
-    
-        newUser.save(function(err){
-            if (err) {
-                console.log(err);
-            } else {
-                res.render("secrets");
-            }
-        });
+    User.register({username: req.body.username}, req.body.password, function(err, user){
+        if (err) {
+            console.log(err);
+            // Redirect to register page so user can retry again
+            res.redirect("/register");
+        } else {
+            // send the cookie to the tell the server that the user is authorised to login
+            passport.authenticate("local")(req, res, function(){
+                res.redirect("/secrets");
+            });
+        }
     });
+});
 
+app.get("/logout", function(req, res){
+    req.logout();
+    res.redirect("/");
 });
 
 app.post("/login", function(req, res){
-    // User credentials
-    const username = req.body.username;
-    const password = req.body.password;
-    // Check if credentials are matching
-    User.findOne({email: username}, function(err, foundUser){
-        if (err){
+    const user = new User({
+        username: req.body.username,
+        password: req.body.password
+    });
+
+    req.login(user, function(err){
+        if (err) {
             console.log(err);
         } else {
-            // Does the user provide an email that exists
-            if (foundUser){
-                bcrypt.hash(password, foundUser.password, function(err, result) {
-                    if (result === true) {
-                        res.render("secrets");
-                    }
-                });
-            }
-        }
-    }); 
+            passport.authenticate("local")(req, res, function(){
+                res.redirect("/secrets");
+        });
+    }
+    });
 });
 
 app.listen(3000, function(){
